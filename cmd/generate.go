@@ -50,11 +50,18 @@ This command also :
 - creates or updates the main.go of the project.
 This command must be rerun after each source code modification, including module import.`,
 	Run: func(cmd *cobra.Command, args []string) {
+		projectDir := "."
+		if len(args) > 0 {
+			projectDir = args[0]
+		}
+		runGenerate(projectDir)
+		/*
 		if len(args) == 0 {
 			fmt.Println("You must specify the project directory ")
 			os.Exit(1)
 		}
 		runGenerate(args[0])
+		*/
 	},
 }
 

@@ -94,6 +94,6 @@ func tearDownTests() {
 	}
 	fmt.Printf("Tearing down database for models\n")
 	admDB := sqlx.MustConnect(dbArgs.Driver, fmt.Sprintf("dbname=postgres sslmode=disable user=%s password=%s", dbArgs.User, dbArgs.Password))
-	admDB.MustExec(fmt.Sprintf("DROP DATABASE %s", dbArgs.DB))
+	admDB.MustExec(fmt.Sprintf("DROP DATABASE IF EXISTS %s", dbArgs.DB))
 	admDB.Close()
 }

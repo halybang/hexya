@@ -8,6 +8,7 @@ import (
 
 	"github.com/hexya-erp/hexya/src/models/types"
 	"github.com/hexya-erp/hexya/src/models/types/dates"
+	"github.com/satori/go.uuid"
 )
 
 // A Type defines a type of a model's field
@@ -33,6 +34,7 @@ const (
 	Selection Type = "selection"
 	Text      Type = "text"
 	JSON      Type = "json"
+	UUID      Type = "uuid"
 )
 
 // IsRelationType returns true if this type is a relation.
@@ -91,6 +93,8 @@ func (t Type) DefaultGoType() reflect.Type {
 		return reflect.TypeOf(*new(dates.DateTime))
 	case JSON:
 		return reflect.TypeOf(*new(types.JSONText))
+	case UUID:
+		return reflect.TypeOf(*new(uuid.UUID))
 	case Float:
 		return reflect.TypeOf(*new(float64))
 	case Integer, Many2One, One2One, Rev2One:

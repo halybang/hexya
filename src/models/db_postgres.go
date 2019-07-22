@@ -53,9 +53,10 @@ var pgTypes = map[fieldtype.Type]string{
 	fieldtype.HTML:      "text",
 	fieldtype.Binary:    "bytea",
 	fieldtype.Selection: "character varying",
-	fieldtype.Many2One:  "integer",
-	fieldtype.One2One:   "integer",
+	fieldtype.Many2One:  "bigint",
+	fieldtype.One2One:   "bigint",
 	fieldtype.JSON:      "jsonb",
+	fieldtype.UUID:      "uuid",
 }
 
 // connectionString returns the connection string for the given parameters

@@ -47,7 +47,7 @@ var pgTypes = map[fieldtype.Type]string{
 	fieldtype.Char:      "character varying",
 	fieldtype.Text:      "text",
 	fieldtype.Date:      "date",
-	fieldtype.DateTime:  "timestamp without time zone",
+	fieldtype.DateTime:  "timestamp with time zone",
 	fieldtype.Integer:   "bigint",
 	fieldtype.Float:     "numeric",
 	fieldtype.HTML:      "text",

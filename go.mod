@@ -3,7 +3,7 @@ module github.com/hexya-erp/hexya
 require (
 	github.com/beevik/etree v1.1.0
 	github.com/disintegration/imaging v1.6.0
-	github.com/flosch/pongo2 v0.0.0-20181225140029-79872a7b2769
+	github.com/flosch/pongo2 v0.0.0-20190707114632-bbf5a6c351f4
 	github.com/gin-contrib/pprof v0.0.0-20181223171755-ea03ef73484d
 	github.com/gin-contrib/sessions v0.0.0-20190101140330-dc5246754963
 	github.com/gin-gonic/gin v1.3.0

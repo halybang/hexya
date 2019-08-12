@@ -139,6 +139,16 @@ func TestComputedStoredFields(t *testing.T) {
 				userWill := users.Search(users.Model().Field("Email").Equals("will.smith@example.com"))
 				So(func() { userWill.Set("DecoratedName", "FooBar") }, ShouldPanic)
 			})
+			Convey("Checking that a computed field can trigger another one", func() {
+				jane := users.Search(users.Model().Field("Email").Equals("jane.smith@example.com"))
+				post := jane.Get("Posts").(RecordSet).Collection().Records()[0]
+				So(jane.Get("Name"), ShouldEqual, "Jane A. Smith")
+				So(post.Get("WriterAge"), ShouldEqual, 24)
+				jane.Get("Profile").(RecordSet).Collection().Set("Age", 25)
+				So(post.Get("WriterAge"), ShouldEqual, 25)
+				jane.Set("Age", int16(24))
+				So(post.Get("WriterAge"), ShouldEqual, 24)
+			})
 		}), ShouldBeNil)
 	})
 }
@@ -198,6 +208,20 @@ func TestRelatedNonStoredFields(t *testing.T) {
 				// pUsersRecs[0] is userJohn because its pMoney is Null.
 				So(pUsersRecs[1].Equals(userWill), ShouldBeTrue)
 				So(pUsersRecs[2].Equals(userJane), ShouldBeTrue)
+			})
+			Convey("Checking that we can chain related fields", func() {
+				posts := env.Pool("Post")
+				post := posts.Search(posts.Model().Field("Title").Equals("1st Post"))
+				So(post.Len(), ShouldEqual, 1)
+				So(post.Get("WriterMoney"), ShouldEqual, 12345)
+			})
+			Convey("Checking that we can chain on a related M2O", func() {
+				userJane := users.Search(users.Model().Field("Email").Equals("jane.smith@example.com"))
+				comments := env.Pool("Comment")
+				comment := comments.Search(comments.Model().Field("Text").Equals("First Comment"))
+				So(comment.Len(), ShouldEqual, 1)
+				So(comment.Get("WriterMoney"), ShouldEqual, 12345)
+				So(comment.Get("PostWriter").(RecordSet).Collection().Equals(userJane), ShouldBeTrue)
 			})
 		}), ShouldBeNil)
 	})

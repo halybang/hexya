@@ -571,7 +571,7 @@ func TestAdvancedQueries(t *testing.T) {
 			Convey("Testing M2O-M2O-M2O", func() {
 				So(jane.Get("Profile.BestPost.User").(RecordSet).Collection().Equals(jane), ShouldBeTrue)
 				So(john.Get("Profile.BestPost.User").(RecordSet).Collection().IsEmpty(), ShouldBeTrue)
-				johnProfile := env.Pool("Profile").Call("Create", NewModelData(users.Model()))
+				johnProfile := env.Pool("Profile").Call("Create", NewModelData(Registry.MustGet("Profile")))
 				john.Set("Profile", johnProfile)
 				So(john.Get("Profile.BestPost.User").(RecordSet).Collection().Get("Email"), ShouldBeEmpty)
 			})
@@ -842,12 +842,27 @@ func TestUpdateRecordSet(t *testing.T) {
 }
 
 func TestDeleteRecordSet(t *testing.T) {
-	Convey("Delete user John Smith", t, func() {
+	Convey("Checking unlink method", t, func() {
 		So(SimulateInNewEnvironment(security.SuperUserID, func(env Environment) {
-			users := env.Pool("User").Search(env.Pool("User").Model().Field("Name").Equals("John Smith"))
-			num := users.Call("Unlink")
-			Convey("Number of deleted record should be 1", func() {
+			Convey("Deleting user John: number of deleted record should be 1", func() {
+				userJohn := env.Pool("User").Search(env.Pool("User").Model().Field("Name").Equals("John Smith"))
+				num := userJohn.Call("Unlink")
 				So(num, ShouldEqual, 1)
+			})
+			Convey("Deleted RecordSet should update themselves when reloading", func() {
+				userJohn := env.Pool("User").Search(env.Pool("User").Model().Field("Name").Equals("John Smith"))
+				userJohn2 := env.Pool("User").Search(env.Pool("User").Model().Field("Name").Equals("John Smith"))
+				users := env.Pool("User").Search(env.Pool("User").Model().Field("Name").Equals("John Smith").Or().Field("Name").Equals("Jane A. Smith"))
+				So(userJohn.Len(), ShouldEqual, 1)
+				So(userJohn2.Len(), ShouldEqual, 1)
+				So(users.Len(), ShouldEqual, 2)
+				userJohn.Call("Unlink")
+				userJohn.ForceLoad()
+				So(userJohn.Len(), ShouldEqual, 0)
+				userJohn2.ForceLoad()
+				So(userJohn2.Len(), ShouldEqual, 0)
+				users.ForceLoad()
+				So(users.Len(), ShouldEqual, 1)
 			})
 		}), ShouldBeNil)
 	})
@@ -856,6 +871,8 @@ func TestDeleteRecordSet(t *testing.T) {
 	Convey("Checking unlink access permissions", t, func() {
 		So(SimulateInNewEnvironment(2, func(env Environment) {
 			userModel := Registry.MustGet("User")
+			profileModel := Registry.MustGet("Profile")
+			postModel := Registry.MustGet("Post")
 
 			Convey("Checking that user 2 cannot unlink records", func() {
 				userModel.methods.MustGet("Load").AllowGroup(group1)
@@ -864,6 +881,13 @@ func TestDeleteRecordSet(t *testing.T) {
 			})
 			Convey("Adding unlink permission to user2", func() {
 				userModel.methods.MustGet("Unlink").AllowGroup(group1)
+				users := env.Pool("User").Search(env.Pool("User").Model().Field("Name").Equals("John Smith"))
+				So(func() { users.Call("Unlink") }, ShouldPanic)
+			})
+			Convey("Adding permissions to user2 on Profile and Post", func() {
+				profileModel.methods.MustGet("Load").AllowGroup(group1)
+				postModel.methods.MustGet("Load").AllowGroup(group1)
+				postModel.methods.MustGet("Write").AllowGroup(group1)
 				users := env.Pool("User").Search(env.Pool("User").Model().Field("Name").Equals("John Smith"))
 				num := users.Call("Unlink")
 				So(num, ShouldEqual, 1)

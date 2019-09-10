@@ -203,6 +203,12 @@ func TestModelDeclaration(t *testing.T) {
 				}
 			})
 
+		user.Methods().MustGet("Copy").Extend("",
+			func(rc *RecordCollection, overrides RecordData) *RecordCollection {
+				overrides.Underlying().Set("Name", fmt.Sprintf("%s (copy)", rc.Get("Name").(string)))
+				return rc.Super().Call("Copy", overrides).(RecordSet).Collection()
+			})
+
 		activeMI.AddMethod("IsActivated", "",
 			func(rc *RecordCollection) bool {
 				return rc.Get("Active").(bool)
@@ -317,7 +323,7 @@ func TestModelDeclaration(t *testing.T) {
 			"IsStaff":  BooleanField{},
 			"IsActive": BooleanField{},
 			"Profile": One2OneField{RelationModel: Registry.MustGet("Profile"),
-				OnDelete: Restrict, Required: true},
+				OnDelete: SetNull, Required: true},
 			"Age": IntegerField{Compute: user.Methods().MustGet("ComputeAge"),
 				Inverse: user.Methods().MustGet("InverseSetAge"),
 				Depends: []string{"Profile", "Profile.Age"}, Stored: true, GoType: new(int16)},

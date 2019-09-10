@@ -89,8 +89,9 @@ func (rc *RecordCollection) create(data RecordData) *RecordCollection {
 	// process create data for FK relations if any
 	data = rc.createFKRelationRecords(data)
 
-	fMap := data.Underlying().FieldMap.Copy()
-	rc.applyDefaults(&fMap, true)
+	newData := data.Underlying().Copy()
+	rc.applyDefaults(newData, true)
+	fMap := newData.Underlying().FieldMap
 	rc.applyContexts()
 	rc.addAccessFieldsCreateData(&fMap)
 	fMap = rc.addEmbeddedfields(fMap)
@@ -114,7 +115,7 @@ func (rc *RecordCollection) create(data RecordData) *RecordCollection {
 	rSet.createReverseRelationRecords(data)
 	// compute stored fields
 	rSet.processInverseMethods(fMap)
-	rSet.processTriggers(fMap)
+	rSet.processTriggers(fMap.Keys())
 	rSet.CheckConstraints()
 	return rSet
 }
@@ -175,7 +176,7 @@ func (rc *RecordCollection) addEmbeddedfields(fMap FieldMap) FieldMap {
 // applyDefaults adds the default value to the given fMap values which
 // are not in fMap. If create is true, default
 // value is set only if the field is required or readonly (and not in fMap).
-func (rc *RecordCollection) applyDefaults(fMap *FieldMap, create bool) {
+func (rc *RecordCollection) applyDefaults(md *ModelData, create bool) {
 	// 1. Create a map with default values from context
 	ctxDefaults := make(FieldMap)
 	for ctxKey, ctxVal := range rc.env.context.ToMap() {
@@ -197,19 +198,19 @@ func (rc *RecordCollection) applyDefaults(fMap *FieldMap, create bool) {
 		if create && (fi.isComputedField() || (fi.isRelatedField() && !fi.isContextedField())) {
 			continue
 		}
-		if _, ok := fMap.Get(fName, rc.model); ok {
+		if md.Has(fName) {
 			// we have the field in the given data, so we don't apply defaults
 			continue
 		}
 		val, exists := ctxDefaults[fi.json]
 		if exists {
-			fMap.Set(fName, val, rc.model)
+			md.Set(fName, val)
 			continue
 		}
 		if fi.defaultFunc == nil {
 			continue
 		}
-		fMap.Set(fName, fi.defaultFunc(rc.Env()), rc.model)
+		md.Set(fName, fi.defaultFunc(rc.Env()))
 	}
 }
 
@@ -257,7 +258,7 @@ func (rc *RecordCollection) addContextsFieldsValues(fMap FieldMap) FieldMap {
 // Each method is only executed once, even if it is called by several fields.
 // It panics as soon as one constraint fails.
 func (rc *RecordCollection) CheckConstraints() {
-	if rc.env.context.GetBool("skip_check_constraints") {
+	if rc.env.context.GetBool("hexya_skip_check_constraints") {
 		return
 	}
 	methods := make(map[string]bool)
@@ -317,7 +318,7 @@ func (rc *RecordCollection) update(data RecordData) bool {
 	// process create data for reverse relations if any
 	rSet.createReverseRelationRecords(data)
 	// compute stored fields
-	rSet.processTriggers(fMap)
+	rSet.processTriggers(fMap.Keys())
 	rSet.CheckConstraints()
 	return true
 }
@@ -565,12 +566,16 @@ func (rc *RecordCollection) unlink() int64 {
 	if rSet.IsEmpty() {
 		return 0
 	}
+	// get recomputate data to update after unlinking
+	compData := rc.retrieveComputeData(rc.model.fields.allJSONNames())
 	sql, args := rSet.query.deleteQuery()
 	res := rSet.env.cr.Execute(sql, args...)
 	num, _ := res.RowsAffected()
 	for _, id := range ids {
 		rc.env.cache.invalidateRecord(rc.model, id)
 	}
+	// Update stored fields that referenced this recordset
+	rc.updateStoredFields(compData)
 	return num
 }
 
@@ -750,6 +755,10 @@ func (rc *RecordCollection) loadRelationFields(fields []string) {
 	for _, rec := range rc.Records() {
 		id := rec.ids[0]
 		for _, fieldName := range fields {
+			fi := rc.model.getRelatedFieldInfo(fieldName)
+			if !fi.fieldType.IsNonStoredRelationType() {
+				continue
+			}
 			thisRC := rec
 			exprs := strings.Split(fieldName, ExprSep)
 			if len(exprs) > 1 {
@@ -758,7 +767,6 @@ func (rc *RecordCollection) loadRelationFields(fields []string) {
 				thisRC.Call("Load", []string{prefix})
 				thisRC = thisRC.Get(prefix).(RecordSet).Collection()
 			}
-			fi := rc.model.getRelatedFieldInfo(fieldName)
 			switch fi.fieldType {
 			case fieldtype.One2Many:
 				relRC := rc.env.Pool(fi.relatedModelName)
@@ -783,8 +791,6 @@ func (rc *RecordCollection) loadRelationFields(fields []string) {
 					relID = relRC.ids[0]
 				}
 				rc.env.cache.updateEntry(rc.model, id, fieldName, relID, rc.query.ctxArgsSlug())
-			default:
-				continue
 			}
 		}
 	}
@@ -795,7 +801,11 @@ func (rc *RecordCollection) loadRelationFields(fields []string) {
 func (rc *RecordCollection) Get(fieldName string) interface{} {
 	fi := rc.model.getRelatedFieldInfo(fieldName)
 	if !rc.IsValid() {
-		return reflect.Zero(fi.structField.Type).Interface()
+		res := reflect.Zero(fi.structField.Type).Interface()
+		if fi.isRelationField() {
+			res = rc.convertToRecordSet(res, fi.relatedModelName)
+		}
+		return res
 	}
 	rc.CheckExecutionPermission(rc.model.methods.MustGet("Load"))
 	rc.Fetch()
@@ -838,6 +848,9 @@ func (rc *RecordCollection) Get(fieldName string) interface{} {
 // ConvertToRecordSet the given val which can be of type *interface{}(nil) int64, []int64
 // for the given related model name
 func (rc *RecordCollection) convertToRecordSet(val interface{}, relatedModelName string) *RecordCollection {
+	if rc.env == nil {
+		return InvalidRecordCollection(relatedModelName)
+	}
 	res := newRecordCollection(rc.Env(), relatedModelName)
 	switch r := val.(type) {
 	case *interface{}, nil, bool:
@@ -896,7 +909,11 @@ func (rc *RecordCollection) get(field string, all bool) (interface{}, bool) {
 		if all {
 			fields = append(fields, rc.model.fields.storedFieldNames()...)
 		}
-		rc.Load(field)
+		rc.Load(fields...)
+		if rc.IsEmpty() {
+			// rc might now be empty if it has just been deleted
+			return nil, true
+		}
 		dbCalled = true
 	}
 	return rc.env.cache.get(rc.model, rc.ids[0], field, rc.query.ctxArgsSlug()), dbCalled
@@ -928,7 +945,7 @@ func (rc *RecordCollection) First() *ModelData {
 	}
 	fields := rc.model.fields.allJSONNames()
 	rc.Load(fields...)
-	res := NewModelData(rc.model)
+	res := NewModelDataFromRS(rc)
 	for _, f := range fields {
 		res.Set(f, rc.Get(f))
 	}

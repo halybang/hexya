@@ -135,6 +135,20 @@ func TestComputedStoredFields(t *testing.T) {
 				userWill.Load()
 				So(userWill.Get("Age"), ShouldEqual, 34)
 			})
+			Convey("Checking that unlinking a record recomputes their dependencies", func() {
+				userWill := users.Search(users.Model().Field("Email").Equals("will.smith@example.com"))
+				userWill.Get("Profile").(RecordSet).Collection().Call("Unlink")
+				So(userWill.Get("Age"), ShouldEqual, 0)
+			})
+			Convey("Recreating a profile for userWill", func() {
+				userWill := users.Search(users.Model().Field("Email").Equals("will.smith@example.com"))
+				willProfileData := NewModelData(profileModel).
+					Set("Age", 36).
+					Set("Money", 5100)
+				willProfile := env.Pool("Profile").Call("Create", willProfileData)
+				userWill.Set("Profile", willProfile)
+				So(userWill.Get("Age"), ShouldEqual, 36)
+			})
 			Convey("Checking that setting a computed field with no inverse panics", func() {
 				userWill := users.Search(users.Model().Field("Email").Equals("will.smith@example.com"))
 				So(func() { userWill.Set("DecoratedName", "FooBar") }, ShouldPanic)
@@ -481,6 +495,26 @@ func TestTypeConversionInMethodCall(t *testing.T) {
 				c := convertFunctionArg(userJane, reflect.TypeOf(TestUserCondition{}), cond)
 				So(c.Type(), ShouldEqual, reflect.TypeOf(TestUserCondition{}))
 				So(c.Interface().(TestUserCondition).Underlying().String(), ShouldEqual, cond.String())
+			})
+		}), ShouldBeNil)
+	})
+}
+
+func TestInvalidRecordSets(t *testing.T) {
+	Convey("Testing Invalid Recordsets", t, func() {
+		So(SimulateInNewEnvironment(security.SuperUserID, func(env Environment) {
+			rc := InvalidRecordCollection("User")
+			Convey("Getting a field on an invalid RecordSet should return empty value", func() {
+				So(rc.Get("Name"), ShouldEqual, "")
+			})
+			Convey("Getting a relation field on an invalid RecordSet should return invalid recordset", func() {
+				profile, ok := rc.Get("Profile").(*RecordCollection)
+				So(ok, ShouldBeTrue)
+				So(profile.IsValid(), ShouldBeFalse)
+				So(profile.model.name, ShouldEqual, "Profile")
+			})
+			Convey("Calling a method on an invalid RecordSet should panic", func() {
+				So(func() { rc.Call("PrefixedUser", ">>") }, ShouldPanic)
 			})
 		}), ShouldBeNil)
 	})

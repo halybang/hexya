@@ -37,6 +37,9 @@ func (rc *RecordCollection) Call(methName string, args ...interface{}) interface
 // with the given arguments and return the result as []interface{}.
 func (rc *RecordCollection) CallMulti(methName string, args ...interface{}) []interface{} {
 	log.Debug("Calling Recordset method", "model", rc.model.name, "method", methName, "ids", rc.ids, "args", strutils.TrimArgs(args))
+	if !rc.IsValid() {
+		panic(fmt.Errorf("you cannot call a method on an invalid RecordSet. Model: %s, Method: %s", rc.model.name, methName))
+	}
 	rc.env.checkRecursion()
 	startTime := time.Now()
 	methInfo, ok := rc.model.methods.Get(methName)
@@ -46,10 +49,10 @@ func (rc *RecordCollection) CallMulti(methName string, args ...interface{}) []in
 
 	methLayer := methInfo.topLayer
 	if rc.env.super {
-		if !ok {
+		methLayer = methInfo.getNextLayer(rc.env.currentLayer)
+		if methLayer == nil {
 			log.Panic("Missing layer", "method", methName, "model", rc.model.name)
 		}
-		methLayer = methInfo.getNextLayer(rc.env.currentLayer)
 	}
 
 	newEnv := rc.Env()
@@ -67,7 +70,9 @@ func (rc *RecordCollection) CallMulti(methName string, args ...interface{}) []in
 			// Reset the current layer and previous method to this method context and not the called one.
 			res[i].(RecordSet).Collection().env.currentLayer = rc.env.currentLayer
 			res[i].(RecordSet).Collection().env.previousMethod = rc.env.previousMethod
-			res[i].(RecordSet).Collection().env.recursions -= 1
+			if res[i].(RecordSet).Collection().env.recursions > 0 {
+				res[i].(RecordSet).Collection().env.recursions -= 1
+			}
 		}
 	}
 	log.Debug("Called Recordset method", "model", rc.ModelName(), "method", methName, "ids", rc.ids, "duration", time.Now().Sub(startTime), "args", strutils.TrimArgs(args))

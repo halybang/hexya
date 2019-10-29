@@ -63,6 +63,9 @@ func TestBaseModelMethods(t *testing.T) {
 				So(countSingle, ShouldEqual, 1)
 				allCount := env.Pool(userModel.name).Call("SearchCount").(int)
 				So(allCount, ShouldEqual, 3)
+				countTags := env.Pool("Tag").WithContext("lang", "fr_FR").
+					Search(Registry.MustGet("Tag").Field("Description").Contains("Nouvelle ")).Call("SearchCount")
+				So(countTags, ShouldEqual, 2)
 			})
 			Convey("Copy", func() {
 				newProfile := userJane.Get("Profile").(RecordSet).Collection().Call("Copy", NewModelData(profileModel)).(RecordSet).Collection()
@@ -91,7 +94,7 @@ func TestBaseModelMethods(t *testing.T) {
 				So(fInfo.Help, ShouldEqual, "The user's username")
 				So(fInfo.Type, ShouldEqual, fieldtype.Char)
 				fInfos := userJane.Call("FieldsGet", FieldsGetArgs{}).(map[string]*FieldInfo)
-				So(fInfos, ShouldHaveLength, 34)
+				So(fInfos, ShouldHaveLength, 35)
 			})
 			Convey("NameGet", func() {
 				So(userJane.Get("DisplayName"), ShouldEqual, "Jane A. Smith")
@@ -113,25 +116,41 @@ func TestBaseModelMethods(t *testing.T) {
 				So(defaults.FieldMap, ShouldContainKey, "is_staff")
 				So(defaults.FieldMap["is_staff"], ShouldEqual, false)
 			})
+			Convey("New", func() {
+				dummyUser := env.Pool("User").Call("New", NewModelData(userModel).
+					Set("Name", "DummyUser").
+					Set("Email", "du@example.com")).(RecordSet).Collection()
+				So(dummyUser.Get("Name"), ShouldEqual, "DummyUser")
+				So(dummyUser.Get("Email"), ShouldEqual, "du@example.com")
+				So(dummyUser.Get("Email2"), ShouldBeEmpty)
+				So(dummyUser.Ids()[0], ShouldBeLessThan, 0)
+				So(func() { dummyUser.ForceLoad() }, ShouldPanic)
+				So(func() { dummyUser.Set("Email2", "du2@example.com") }, ShouldNotPanic)
+				So(dummyUser.Get("Email2"), ShouldEqual, "du2@example.com")
+				So(dummyUser.Get("DecoratedName"), ShouldEqual, "User: DummyUser [<du@example.com>]")
+				So(func() { dummyUser.unlink() }, ShouldNotPanic)
+			})
 			Convey("Onchange", func() {
 				Convey("Testing with existing RecordSet", func() {
 					res := userJane.Call("Onchange", OnchangeParams{
-						Fields:   []string{"Name", "CoolType"},
-						Onchange: map[string]string{"Name": "1", "CoolType": "1"},
-						Values:   NewModelData(userModel, FieldMap{"Name": "William", "CoolType": "cool", "IsCool": false}),
+						Fields:   []string{"Name", "CoolType", "Age"},
+						Onchange: map[string]string{"Name": "1", "CoolType": "1", "Age": "1"},
+						Values:   NewModelData(userModel, FieldMap{"Name": "William", "CoolType": "cool", "IsCool": false, "DecoratedName": false, "Profile": false, "Age": int16(24)}),
 					}).(OnchangeResult)
 					fMap := res.Value.Underlying().FieldMap
-					So(fMap, ShouldHaveLength, 2)
+					So(fMap, ShouldHaveLength, 3)
 					So(fMap, ShouldContainKey, "decorated_name")
 					So(fMap["decorated_name"], ShouldEqual, "User: William [<jane.smith@example.com>]")
 					So(fMap, ShouldContainKey, "is_cool")
 					So(fMap["is_cool"], ShouldEqual, true)
+					So(fMap, ShouldContainKey, "age")
+					So(fMap["age"], ShouldEqual, int16(0))
 				})
 				Convey("Testing with new RecordSet", func() {
 					res := env.Pool("User").Call("Onchange", OnchangeParams{
-						Fields:   []string{"Name", "Email", "CoolType"},
-						Onchange: map[string]string{"Name": "1", "CoolType": "1"},
-						Values:   NewModelData(userModel, FieldMap{"Name": "", "Email": "", "CoolType": "cool", "IsCool": false}),
+						Fields:   []string{"Name", "Email", "CoolType", "Nums", "Nums"},
+						Onchange: map[string]string{"Name": "1", "CoolType": "1", "Nums": "1"},
+						Values:   NewModelData(userModel, FieldMap{"Name": "", "Email": "", "CoolType": "cool", "IsCool": false, "DecoratedName": false}),
 					}).(OnchangeResult)
 					fMap := res.Value.Underlying().FieldMap
 					So(fMap, ShouldHaveLength, 2)
@@ -139,6 +158,23 @@ func TestBaseModelMethods(t *testing.T) {
 					So(fMap["decorated_name"], ShouldEqual, "User:  [<>]")
 					So(fMap, ShouldContainKey, "is_cool")
 					So(fMap["is_cool"], ShouldEqual, true)
+				})
+				Convey("Testing with new RecordSet and related field", func() {
+					post := env.Pool("Post").SearchAll().Limit(1)
+					res := env.Pool("User").Call("Onchange", OnchangeParams{
+						Fields:   []string{"Name", "Email", "CoolType", "Nums", "Nums", "Mana"},
+						Onchange: map[string]string{"Name": "1", "CoolType": "1", "Nums": "1", "Mana": "1"},
+						Values: NewModelData(userModel, FieldMap{"Name": "", "Email": "", "CoolType": "cool",
+							"IsCool": false, "DecoratedName": false, "Mana": float32(12.3), "BestProfilePost": false}),
+					}).(OnchangeResult)
+					fMap := res.Value.Underlying().FieldMap
+					So(fMap, ShouldHaveLength, 3)
+					So(fMap, ShouldContainKey, "decorated_name")
+					So(fMap["decorated_name"], ShouldEqual, "User:  [<>]")
+					So(fMap, ShouldContainKey, "is_cool")
+					So(fMap["is_cool"], ShouldEqual, true)
+					So(fMap, ShouldContainKey, "best_profile_post_id")
+					So(fMap["best_profile_post_id"].(RecordSet).Collection().Equals(post), ShouldBeTrue)
 				})
 			})
 			Convey("CheckRecursion", func() {
@@ -158,6 +194,10 @@ func TestBaseModelMethods(t *testing.T) {
 				So(tag1.Call("CheckRecursion").(bool), ShouldBeFalse)
 				So(tag2.Call("CheckRecursion").(bool), ShouldBeFalse)
 				So(tag3.Call("CheckRecursion").(bool), ShouldBeFalse)
+				tagNeg := env.Pool("Tag").Call("New", NewModelData(tagModel).
+					Set("Name", "Tag1").
+					Set("Parent", tag2)).(RecordSet).Collection()
+				So(tagNeg.Call("CheckRecursion").(bool), ShouldBeTrue)
 			})
 			Convey("Browse", func() {
 				browsedUser := env.Pool("User").Call("Browse", []int64{userJane.Ids()[0]}).(RecordSet).Collection()
@@ -175,6 +215,9 @@ func TestBaseModelMethods(t *testing.T) {
 					Field("Name").Like("J% Smith")).(RecordSet).Collection()
 				So(usersJ.Records(), ShouldHaveLength, 2)
 				So(usersJ.Equals(johnAndJane), ShouldBeTrue)
+
+				So(InvalidRecordCollection("User").Equals(usersJ), ShouldBeFalse)
+				So(env.Pool("Profile").Equals(userJane), ShouldBeFalse)
 			})
 			Convey("Union", func() {
 				userJohn := env.Pool("User").Call("Search", env.Pool("User").Model().
@@ -190,6 +233,9 @@ func TestBaseModelMethods(t *testing.T) {
 				So(all.Intersect(userJane).Equals(userJane), ShouldBeTrue)
 				So(all.Intersect(userJohn).Equals(userJohn), ShouldBeTrue)
 				So(all.Intersect(userWill).Equals(userWill), ShouldBeTrue)
+
+				So(InvalidRecordCollection("User").Union(userJane).IsValid(), ShouldBeFalse)
+				So(func() { env.Pool("Profile").Union(userJane) }, ShouldPanic)
 			})
 			Convey("Subtract", func() {
 				userJohn := env.Pool("User").Call("Search", env.Pool("User").Model().
@@ -197,6 +243,9 @@ func TestBaseModelMethods(t *testing.T) {
 				johnAndJane := userJohn.Union(userJane)
 				So(johnAndJane.Subtract(userJane).Equals(userJohn), ShouldBeTrue)
 				So(johnAndJane.Subtract(userJohn).Equals(userJane), ShouldBeTrue)
+
+				So(InvalidRecordCollection("User").Subtract(userJane).IsValid(), ShouldBeFalse)
+				So(func() { env.Pool("Profile").Subtract(userJane) }, ShouldPanic)
 			})
 			Convey("Intersect", func() {
 				userJohn := env.Pool("User").Call("Search", env.Pool("User").Model().
@@ -204,6 +253,9 @@ func TestBaseModelMethods(t *testing.T) {
 				johnAndJane := userJohn.Union(userJane)
 				So(johnAndJane.Intersect(userJane).Equals(userJane), ShouldBeTrue)
 				So(johnAndJane.Call("Intersect", userJohn).(RecordSet).Collection().Equals(userJohn), ShouldBeTrue)
+
+				So(InvalidRecordCollection("User").Intersect(userJane).IsValid(), ShouldBeFalse)
+				So(func() { env.Pool("Profile").Intersect(userJane) }, ShouldPanic)
 			})
 			Convey("ConvertLimitToInt", func() {
 				So(ConvertLimitToInt(12), ShouldEqual, 12)
@@ -294,6 +346,10 @@ func TestBaseModelMethods(t *testing.T) {
 				for i, post := range sortedPosts {
 					So(post.Get("Title"), ShouldEqual, fmt.Sprintf("Post no %02d", i))
 				}
+
+				So(InvalidRecordCollection("Post").Sorted(func(rs1 RecordSet, rs2 RecordSet) bool {
+					return rs1.Collection().Get("Title").(string) < rs2.Collection().Get("Title").(string)
+				}).IsValid(), ShouldBeFalse)
 			})
 			Convey("SortedDefault", func() {
 				Convey("With posts", func() {
@@ -387,6 +443,10 @@ func TestBaseModelMethods(t *testing.T) {
 				for i := 0; i < 10; i++ {
 					So(evenPosts[i].Get("Title"), ShouldEqual, fmt.Sprintf("Post no %02d", 2*i))
 				}
+
+				So(InvalidRecordCollection("Post").Filtered(func(rs RecordSet) bool {
+					return true
+				}).IsValid(), ShouldBeFalse)
 			})
 			Convey("CheckExecutionPermissions", func() {
 				res := env.Pool("User").Call("CheckExecutionPermission", Registry.MustGet("User").Methods().MustGet("Load"), []bool{true})
@@ -423,15 +483,40 @@ func TestBaseModelMethods(t *testing.T) {
 	})
 }
 
+func TestPostBootSequences(t *testing.T) {
+	Convey("Testing manual sequences after bootstrap", t, func() {
+		testSeq := Registry.MustGetSequence("Test")
+		testSeq.Drop()
+		seq := CreateSequence("ManualSequence", 1, 1)
+		So(seq.JSON, ShouldEqual, "manual_sequence_manseq")
+		So(testAdapter.sequences("%_manseq"), ShouldHaveLength, 1)
+		So(testAdapter.sequences("%_manseq")[0].Name, ShouldEqual, "manual_sequence_manseq")
+		So(seq.NextValue(), ShouldEqual, 1)
+		So(seq.NextValue(), ShouldEqual, 2)
+		seq.Alter(2, 5)
+		So(seq.NextValue(), ShouldEqual, 5)
+		So(seq.NextValue(), ShouldEqual, 7)
+		So(func() { CreateSequence("ManualSequence", 1, 1) }, ShouldPanic)
+		seq.Drop()
+		So(testAdapter.sequences("%_manseq"), ShouldHaveLength, 0)
+	})
+	Convey("Boot sequences cannot be altered or dropped after bootstrap", t, func() {
+		bootSeq := Registry.MustGetSequence("TestSequence")
+		So(bootSeq.boot, ShouldBeTrue)
+		So(func() { bootSeq.Alter(3, 4) }, ShouldPanic)
+		So(func() { bootSeq.Drop() }, ShouldPanic)
+	})
+}
+
 func TestFreeTransientModels(t *testing.T) {
 	transientModelTimeout = 1500 * time.Millisecond
-	// Restart workerloop with a very small period
-	workerStop <- true
-	workloop(400 * time.Millisecond)
+	// Start workerloop with a very small period
+	workerFunctions = []WorkerFunction{NewWorkerFunction(FreeTransientModels, 400*time.Millisecond)}
+	RunWorkerLoop()
 
 	var wizID int64
 	Convey("Test freeing transient models", t, func() {
-		ExecuteInNewEnvironment(security.SuperUserID, func(env Environment) {
+		So(ExecuteInNewEnvironment(security.SuperUserID, func(env Environment) {
 			wizModel := env.Pool("Wizard")
 			Convey("Creating a transient record", func() {
 				wiz := wizModel.Call("Create", NewModelData(wizModel.model).
@@ -450,7 +535,10 @@ func TestFreeTransientModels(t *testing.T) {
 				wiz.Load()
 				So(wiz.IsEmpty(), ShouldBeTrue)
 			})
-		})
+		}), ShouldBeNil)
 	})
-	workerStop <- true
+	StopWorkerLoop()
+	if workerStop != nil {
+		t.Fail()
+	}
 }

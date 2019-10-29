@@ -15,11 +15,8 @@
 package models
 
 import (
-	"database/sql"
-	"errors"
 	"fmt"
 	"reflect"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -27,8 +24,8 @@ import (
 	"github.com/hexya-erp/hexya/src/models/fieldtype"
 	"github.com/hexya-erp/hexya/src/models/security"
 	"github.com/hexya-erp/hexya/src/models/types/dates"
-	"github.com/hexya-erp/hexya/src/tools/nbutils"
 	"github.com/hexya-erp/hexya/src/tools/strutils"
+	"github.com/hexya-erp/hexya/src/tools/typesutils"
 	"github.com/jmoiron/sqlx"
 )
 
@@ -73,7 +70,12 @@ func (mc *modelCollection) MustGet(nameOrJSON string) *Model {
 func (mc *modelCollection) GetSequence(nameOrJSON string) (s *Sequence, ok bool) {
 	s, ok = mc.sequences[nameOrJSON]
 	if !ok {
-		s, ok = mc.sequences[nameOrJSON]
+		jsonBoot := strutils.SnakeCase(nameOrJSON) + "_bootseq"
+		s, ok = mc.sequences[jsonBoot]
+		if !ok {
+			jsonMan := strutils.SnakeCase(nameOrJSON) + "_manseq"
+			s, ok = mc.sequences[jsonMan]
+		}
 	}
 	return
 }
@@ -97,6 +99,16 @@ func (mc *modelCollection) add(mi *Model) {
 	mc.registryByTableName[mi.tableName] = mi
 	mi.methods.model = mi
 	mi.fields.model = mi
+}
+
+// add the given Model to the modelCollection
+func (mc *modelCollection) addSequence(s *Sequence) {
+	if _, exists := mc.GetSequence(s.JSON); exists {
+		log.Panic("Trying to add already existing sequence", "sequence", s.JSON)
+	}
+	mc.Lock()
+	defer mc.Unlock()
+	mc.sequences[s.JSON] = s
 }
 
 // newModelCollection returns a pointer to a new modelCollection
@@ -231,37 +243,12 @@ func (m *Model) convertValuesToFieldType(fMap *FieldMap, writeDB bool) {
 		}
 		fi := m.getRelatedFieldInfo(colName)
 		fType := fi.structField.Type
-		if fType == reflect.TypeOf(fMapValue) {
-			// If we already have the good type, don't do anything
-			continue
+		typedValue := reflect.New(fType).Interface()
+		err := typesutils.Convert(fMapValue, typedValue, fi.isRelationField())
+		if err != nil {
+			log.Panic(err.Error(), "model", m.name, "field", colName, "type", fType, "value", fMapValue)
 		}
-		var val reflect.Value
-		switch {
-		case fMapValue == nil:
-			// dbValue is null, we put the type zero value instead
-			val = reflect.Zero(fType)
-		case reflect.PtrTo(fType).Implements(reflect.TypeOf((*sql.Scanner)(nil)).Elem()):
-			// the type implements sql.Scanner, so we call Scan
-			valPtr := reflect.New(fType)
-			scanFunc := valPtr.MethodByName("Scan")
-			inArgs := []reflect.Value{reflect.ValueOf(fMapValue)}
-			res := scanFunc.Call(inArgs)
-			if res[0].Interface() != nil {
-				log.Panic("Unable to scan into target Type", "error", res[0].Interface())
-			}
-			val = valPtr.Elem()
-		default:
-			var err error
-			if fi.isRelationField() {
-				val, err = getRelationFieldValue(fMapValue, fType)
-			} else {
-				val, err = getSimpleTypeValue(fMapValue, fType)
-			}
-			if err != nil {
-				log.Panic(err.Error(), "model", m.name, "field", colName, "type", fType, "value", fMapValue)
-			}
-		}
-		destVals.SetMapIndex(reflect.ValueOf(colName), val)
+		destVals.SetMapIndex(reflect.ValueOf(colName), reflect.ValueOf(typedValue).Elem())
 	}
 	if writeDB {
 		// Change zero values to NULL if writing to DB when applicable
@@ -275,74 +262,6 @@ func (m *Model) convertValuesToFieldType(fMap *FieldMap, writeDB bool) {
 			}
 		}
 	}
-}
-
-// getSimpleTypeValue returns value as a reflect.Value with type of targetType
-// It returns an error if the value cannot be converted to the target type
-func getSimpleTypeValue(value interface{}, targetType reflect.Type) (reflect.Value, error) {
-	val := reflect.ValueOf(value)
-	if val.IsValid() {
-		typ := val.Type()
-		switch {
-		case typ.ConvertibleTo(targetType):
-			val = val.Convert(targetType)
-		case targetType.Kind() == reflect.Bool:
-			val = reflect.ValueOf(!reflect.DeepEqual(val.Interface(), reflect.Zero(val.Type()).Interface()))
-		case typ == reflect.TypeOf([]byte{}) && targetType.Kind() == reflect.Float32:
-			// backend may return floats as []byte when stored as numeric
-			fval, err := strconv.ParseFloat(string(value.([]byte)), 32)
-			if err != nil {
-				return reflect.Value{}, err
-			}
-			val = reflect.ValueOf(float32(fval))
-		case typ == reflect.TypeOf([]byte{}) && targetType.Kind() == reflect.Float64:
-			// backend may return floats as []byte when stored as numeric
-			fval, err := strconv.ParseFloat(string(value.([]byte)), 64)
-			if err != nil {
-				return reflect.Value{}, err
-			}
-			val = reflect.ValueOf(fval)
-		}
-	}
-	return val, nil
-}
-
-// getRelationFieldValue returns value as a reflect.Value with type of targetType
-// It returns an error if the value is not consistent with a relation field value
-// (i.e. is not of type RecordSet or int64 or []int64)
-func getRelationFieldValue(value interface{}, targetType reflect.Type) (reflect.Value, error) {
-	var (
-		val reflect.Value
-		err error
-	)
-	switch tValue := value.(type) {
-	case RecordSet:
-		ids := tValue.Ids()
-		if targetType == reflect.TypeOf(int64(0)) {
-			if len(ids) > 0 {
-				val = reflect.ValueOf(ids[0])
-			} else {
-				val = reflect.ValueOf((*interface{})(nil))
-			}
-		} else if targetType == reflect.TypeOf([]int64{}) {
-			val = reflect.ValueOf(ids)
-		} else {
-			err = errors.New("non consistent type")
-		}
-	case []interface{}:
-		if len(tValue) == 0 {
-			val = reflect.ValueOf((*interface{})(nil))
-			break
-		}
-		err = errors.New("non empty []interface{} given")
-	case []int64, *interface{}:
-		val = reflect.ValueOf(value)
-	default:
-		nbValue, nbErr := nbutils.CastToInteger(tValue)
-		val = reflect.ValueOf(nbValue)
-		err = nbErr
-	}
-	return val, err
 }
 
 // isMixin returns true if this is a mixin model.
@@ -420,7 +339,7 @@ func (m *Model) SetDefaultOrder(orders ...string) {
 // fieldName may be a dot separated path from this model.
 // It panics if the path is invalid.
 func (m *Model) JSONizeFieldName(fieldName string) string {
-	return jsonizePath(m, string(fieldName))
+	return jsonizePath(m, fieldName)
 }
 
 // Field starts a condition on this model
@@ -625,7 +544,6 @@ func createModel(name string, options Option) *Model {
 // bootstrap and cannot be modified afterwards. The latter will be
 // created, updated or dropped immediately.
 type Sequence struct {
-	Name      string
 	JSON      string
 	Increment int64
 	Start     int64
@@ -635,25 +553,24 @@ type Sequence struct {
 // CreateSequence creates a new Sequence in the database and returns a pointer to it
 func CreateSequence(name string, increment, start int64) *Sequence {
 	var boot bool
+	suffix := "manseq"
 	if !Registry.bootstrapped {
 		boot = true
+		suffix = "bootseq"
 	}
-	json := fmt.Sprintf("%s_manseq", strutils.SnakeCase(name))
+	json := fmt.Sprintf("%s_%s", strutils.SnakeCase(name), suffix)
 	seq := &Sequence{
-		Name:      name,
 		JSON:      json,
 		Increment: increment,
 		Start:     start,
 		boot:      boot,
 	}
-	Registry.Lock()
-	defer Registry.Unlock()
-	Registry.sequences[name] = seq
 	if !boot {
 		// Create the sequence on the fly if we already bootstrapped.
 		// Otherwise, this will be done in Bootstrap
 		adapters[db.DriverName()].createSequence(seq.JSON, seq.Increment, seq.Start)
 	}
+	Registry.addSequence(seq)
 	return seq
 }
 
@@ -661,7 +578,7 @@ func CreateSequence(name string, increment, start int64) *Sequence {
 func (s *Sequence) Drop() {
 	Registry.Lock()
 	defer Registry.Unlock()
-	delete(Registry.sequences, s.Name)
+	delete(Registry.sequences, s.JSON)
 	if Registry.bootstrapped {
 		// Drop the sequence on the fly if we already bootstrapped.
 		// Otherwise, this will be done in Bootstrap

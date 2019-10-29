@@ -19,6 +19,7 @@ import (
 
 	"github.com/hexya-erp/hexya/src/models/security"
 	"github.com/hexya-erp/hexya/src/models/types"
+	"github.com/lib/pq"
 	. "github.com/smartystreets/goconvey/convey"
 )
 
@@ -156,7 +157,6 @@ func TestEnvironment(t *testing.T) {
 				So(post2.Len(), ShouldEqual, 1)
 				So(env.cache.data, ShouldHaveLength, 2)
 				So(env.cache.data["Post"], ShouldHaveLength, 1)
-				So(env.cache.data["Tag"], ShouldHaveLength, 2)
 				tags := env.Pool("Tag").Search(tagModel.Field("Name").In([]string{"Books", "Jane's"}))
 				tags.Fetch()
 				So(tags.Len(), ShouldEqual, 2)
@@ -243,17 +243,48 @@ X2M Links
 			})
 		}), ShouldBeNil)
 	})
-	Convey("Testing SimulateWithDummyRecord", t, func() {
-		err := SimulateWithDummyRecord(security.SuperUserID, NewModelData(Registry.MustGet("User")), func(rs RecordSet) {
-			panic("oh no !")
-		})
-		So(err, ShouldNotBeNil)
-		So(err.Error(), ShouldStartWith, "oh no !")
-	})
 	Convey("Checking error types", t, func() {
 		nice := new(notInCacheError)
 		So(nice.Error(), ShouldEqual, "requested value not in cache")
 		nepe := new(nonExistentPathError)
 		So(nepe.Error(), ShouldEqual, "requested path is broken")
+	})
+	Convey("Testing db error retries", t, func() {
+		Convey("ExecuteInNewEnvironment should retry db errors up to max retries", func() {
+			var retries uint8
+			So(doExecuteInNewEnvironment(security.SuperUserID, 0, func(env Environment) {
+				retries++
+				panic(&pq.Error{Code: "40001"})
+			}), ShouldNotBeNil)
+			So(retries, ShouldEqual, DBSerializationMaxRetries)
+		})
+		Convey("ExecuteInNewEnvironment should retry db errors and stop when ok", func() {
+			var retries uint8
+			So(doExecuteInNewEnvironment(security.SuperUserID, 0, func(env Environment) {
+				retries++
+				if retries < 3 {
+					panic(&pq.Error{Code: "40001"})
+				}
+			}), ShouldBeNil)
+			So(retries, ShouldEqual, 3)
+		})
+		Convey("SimulateInNewEnvironment should retry db errors up to max retries", func() {
+			var retries uint8
+			So(doSimulateInNewEnvironment(security.SuperUserID, 0, func(env Environment) {
+				retries++
+				panic(&pq.Error{Code: "40001"})
+			}), ShouldNotBeNil)
+			So(retries, ShouldEqual, DBSerializationMaxRetries)
+		})
+		Convey("SimulateInNewEnvironment should retry db errors and stop when ok", func() {
+			var retries uint8
+			So(doSimulateInNewEnvironment(security.SuperUserID, 0, func(env Environment) {
+				retries++
+				if retries < 3 {
+					panic(&pq.Error{Code: "40001"})
+				}
+			}), ShouldBeNil)
+			So(retries, ShouldEqual, 3)
+		})
 	})
 }

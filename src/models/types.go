@@ -15,6 +15,7 @@
 package models
 
 import (
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"reflect"
@@ -32,6 +33,8 @@ type RecordRef struct {
 // RecordSet identifies a type that holds a set of records of
 // a given model.
 type RecordSet interface {
+	sql.Scanner
+	fmt.Stringer
 	// ModelName returns the name of the model of this RecordSet
 	ModelName() string
 	// Ids returns the ids in this set of Records
@@ -132,6 +135,7 @@ type Conditioner interface {
 
 // A RecordData can return a ModelData object through its Underlying() method
 type RecordData interface {
+	sql.Scanner
 	Underlying() *ModelData
 }
 
@@ -145,6 +149,21 @@ type ModelData struct {
 }
 
 var _ RecordData = new(ModelData)
+
+// Scan implements sql.Scanner
+func (md *ModelData) Scan(src interface{}) error {
+	switch val := src.(type) {
+	case nil:
+		return nil
+	case FieldMapper:
+		md.FieldMap = val.Underlying()
+	case map[string]interface{}:
+		md.FieldMap = val
+	default:
+		return fmt.Errorf("unexpected type %T to represent RecordData: %s", src, src)
+	}
+	return nil
+}
 
 // Get returns the value of the given field.
 //
@@ -183,6 +202,7 @@ func (md *ModelData) Set(field string, value interface{}) *ModelData {
 // It returns the given ModelData so that calls can be chained
 func (md *ModelData) Unset(field string) *ModelData {
 	md.FieldMap.Delete(field, md.Model)
+	delete(md.ToCreate, md.Model.JSONizeFieldName(field))
 	return md
 }
 
@@ -209,6 +229,28 @@ func (md *ModelData) Copy() *ModelData {
 		Model:    md.Model,
 		FieldMap: md.FieldMap.Copy(),
 		ToCreate: ntc,
+	}
+}
+
+// MergeWith updates this ModelData with the given other ModelData.
+// If a key of the other ModelData already exists here, the value is overridden,
+// otherwise, the key is inserted with its json name.
+func (md *ModelData) MergeWith(other *ModelData) {
+	// 1. We unset all entries existing in other to remove both FieldMap and ToCreate entries
+	for field := range other.FieldMap {
+		if md.Has(field) {
+			md.Unset(field)
+		}
+	}
+	for field := range other.ToCreate {
+		if md.Has(field) {
+			md.Unset(field)
+		}
+	}
+	// 2. We set other values in md
+	md.FieldMap.MergeWith(other.FieldMap, other.Model)
+	for field, toCreate := range other.ToCreate {
+		md.ToCreate[field] = append(md.ToCreate[field], toCreate...)
 	}
 }
 

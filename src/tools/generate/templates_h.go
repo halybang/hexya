@@ -248,6 +248,13 @@ func (d {{ $.Name }}Data) Copy() {{ .InterfacesPackageName }}.{{ $.Name }}Data {
 	}
 }
 
+// MergeWith updates this {{ $.Name }}Data with the given other {{ $.Name }}Data
+// If a field of the other {{ $.Name }}Data already exists here, the value is overridden,
+// otherwise, the field is inserted.
+func (d {{ $.Name }}Data) MergeWith(other {{ .InterfacesPackageName }}.{{ $.Name }}Data) {
+	d.ModelData.MergeWith(other.Underlying())
+}
+
 {{ range .Fields }}
 // {{ .Name }} returns the value of the {{ .Name }} field.
 // If this {{ .Name }} is not set in this {{ $.Name }}Data, then
@@ -255,7 +262,7 @@ func (d {{ $.Name }}Data) Copy() {{ .InterfacesPackageName }}.{{ $.Name }}Data {
 func (d {{ $.Name }}Data) {{ .Name }}() {{ .Type }} {
 	val := d.ModelData.Get("{{ .Name }}")
 {{- if .IsRS }}	
-	if !d.Has("{{ .Name }}") || val == (*interface{})(nil) {
+	if !d.Has("{{ .Name }}") || val == nil || val == (*interface{})(nil) {
 		val = models.InvalidRecordCollection("{{ .RelModel }}")
 	}
 	return val.(models.RecordSet).Collection().Wrap().({{ .Type }})

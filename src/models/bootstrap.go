@@ -32,12 +32,9 @@ type modelCouple struct {
 	mixIn *Model
 }
 
-const workloopPeriod = 1 * time.Minute
+const freeTransientPeriod = 1 * time.Minute
 
-var (
-	mixed      = map[modelCouple]bool{}
-	workerStop chan bool
-)
+var mixed = map[modelCouple]bool{}
 
 // BootStrap freezes model, fields and method caches and syncs the database structure
 // with the declared data.
@@ -46,6 +43,9 @@ func BootStrap() {
 	if Registry.bootstrapped == true {
 		log.Panic("Trying to bootstrap models twice !")
 	}
+	// loadManualSequencesFromDB locks registry, so we call it first
+	loadManualSequencesFromDB()
+
 	Registry.Lock()
 	defer Registry.Unlock()
 
@@ -61,7 +61,7 @@ func BootStrap() {
 	checkFieldMethodsExist()
 	checkComputeMethodsSignature()
 	setupSecurity()
-	workloop(workloopPeriod)
+	RegisterWorker(NewWorkerFunction(FreeTransientModels, freeTransientPeriod))
 
 	Registry.bootstrapped = true
 }
@@ -454,26 +454,19 @@ func checkFieldMethodsExist() {
 	}
 }
 
-// workloopMethods executes all methods that must be run regularly.
-func workloopMethods() {
-	go FreeTransientModels()
-}
-
-// workloop launches the hexya core worker loop.
-func workloop(period time.Duration) {
-	if workerStop == nil {
-		workerStop = make(chan bool)
+// loadManualSequencesFromDB fetches manual sequences from DB and updates registry
+func loadManualSequencesFromDB() {
+	if db == nil {
+		// Happens when bootstrapping models without DB for tests
+		return
 	}
-	go func() {
-		ticker := time.NewTicker(period)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ticker.C:
-				workloopMethods()
-			case <-workerStop:
-				return
-			}
+	adapter := adapters[db.DriverName()]
+	for _, dbSeq := range adapter.sequences("%_manseq") {
+		seq := &Sequence{
+			JSON:      dbSeq.Name,
+			Start:     dbSeq.StartValue,
+			Increment: dbSeq.Increment,
 		}
-	}()
+		Registry.addSequence(seq)
+	}
 }

@@ -113,7 +113,7 @@ func TestCreateRecordSet(t *testing.T) {
 					"Post": post1,
 					"Text": "Third Comment",
 				}))
-				So(post1.Get("LastCommentText").(string), ShouldEqual, "Third Comment")
+				So(post1.Get("LastCommentText").(string), ShouldEqual, "First Comment")
 				So(post1.Get("Comments").(RecordSet).Len(), ShouldEqual, 3)
 			})
 			Convey("Creating a user Will Smith", func() {
@@ -863,6 +863,22 @@ func TestDeleteRecordSet(t *testing.T) {
 				So(userJohn2.Len(), ShouldEqual, 0)
 				users.ForceLoad()
 				So(users.Len(), ShouldEqual, 1)
+			})
+			Convey("Deleted RecordSet should update themselves when reloading with prefetch", func() {
+				users := env.Pool("User").SearchAll()
+				So(users.Len(), ShouldEqual, 3)
+				So(users.Records()[0].Get("Name"), ShouldEqual, "John Smith")
+				userJohn := env.Pool("User").Search(env.Pool("User").Model().Field("Name").Equals("John Smith"))
+				userJohn2 := users.Records()[0]
+				users.Records()[0].Call("Unlink")
+				userJohn2.ForceLoad()
+				So(userJohn2.IsEmpty(), ShouldBeTrue)
+				users.ForceLoad()
+				So(users.Len(), ShouldEqual, 2)
+				So(users.Records()[0].Get("Name"), ShouldEqual, "Jane A. Smith")
+				So(users.Records()[1].Get("Name"), ShouldEqual, "Will Smith")
+				userJohn.ForceLoad()
+				So(userJohn.Len(), ShouldEqual, 0)
 			})
 		}), ShouldBeNil)
 	})
